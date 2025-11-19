@@ -2,6 +2,7 @@ import streamlit as st
 from PIL import Image, ImageEnhance, ImageFilter
 from transformers import BlipProcessor, BlipForConditionalGeneration
 import torch
+import requests
 
 # Fix for Streamlit watcher error with PyTorch
 try:
@@ -391,6 +392,74 @@ def generate_caption_free(image, preferences=None):
             return False, "Request timed out. Please try again."
         else:
             return False, f"Error generating caption: {error_msg}"
+
+def generate_caption_api(image, preferences=None, api_token=None):
+    """Generate caption using Hugging Face Inference API (Cloud)"""
+    try:
+        # Convert image to bytes
+        import io
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format=image.format if image.format else 'JPEG')
+        img_bytes = img_byte_arr.getvalue()
+
+        # API Configuration
+        API_URL = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large"
+        headers = {}
+        if api_token:
+            headers["Authorization"] = f"Bearer {api_token}"
+        
+        # Make request
+        response = requests.post(API_URL, headers=headers, data=img_bytes)
+        
+        if response.status_code != 200:
+            # Fallback to base model if large is busy/error
+            API_URL = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base"
+            response = requests.post(API_URL, headers=headers, data=img_bytes)
+            
+            if response.status_code != 200:
+                return False, f"API Error: {response.text}"
+        
+        result = response.json()
+        if isinstance(result, list) and len(result) > 0 and 'generated_text' in result[0]:
+            base_caption = result[0]['generated_text']
+            
+            # Enhanced capitalization and formatting
+            if base_caption:
+                base_caption = base_caption.strip()
+                sentences = base_caption.split('. ')
+                base_caption = '. '.join([s[0].upper() + s[1:] if s else s for s in sentences])
+            
+            # Extract text from image using enhanced OCR (Local)
+            extracted_text = ""
+            with st.spinner("🔍 Scanning image for text with advanced OCR..."):
+                extracted_text = extract_text_from_image(image)
+            
+            # Intelligently combine caption with extracted text if available
+            if extracted_text and len(extracted_text.strip()) > 1:
+                text_content = extracted_text.strip()
+                if len(text_content) < 30:
+                    base_caption = f"{base_caption}. The text reads: \"{text_content}\""
+                elif len(text_content) < 80:
+                    base_caption = f"{base_caption}. The visible text states: \"{text_content}\""
+                else:
+                    preview = text_content[:100].rsplit(' ', 1)[0]
+                    base_caption = f"{base_caption}. The image contains text beginning with: \"{preview}...\""
+                st.session_state['last_extracted_text'] = text_content
+            else:
+                st.session_state['last_extracted_text'] = None
+            
+            # Enhance caption based on user preferences
+            if preferences:
+                caption = enhance_caption(base_caption, preferences)
+            else:
+                caption = base_caption
+            
+            return True, caption
+            
+        return False, "Invalid response from API"
+        
+    except Exception as e:
+        return False, f"Error generating caption via API: {str(e)}"
 
 def translate_text(text, target_lang):
     """Translate text to target language using deep-translator"""
@@ -944,6 +1013,23 @@ def main():
         
         if image is not None:
             st.markdown("---")
+            
+            # Generation Mode Selection
+            with st.expander("🔧 Generation Settings", expanded=False):
+                gen_mode = st.radio(
+                    "Generation Mode",
+                    ["Cloud API (Recommended)", "Local Processing"],
+                    help="Cloud API is faster and works on free hosting. Local Processing runs on your machine but requires more RAM."
+                )
+                
+                api_token = None
+                if gen_mode == "Cloud API (Recommended)":
+                    api_token = st.text_input(
+                        "Hugging Face API Token (Optional)",
+                        type="password",
+                        help="Enter your HF Token for higher rate limits. Leave empty to use public access."
+                    )
+            
             if st.button("🚀 Generate Caption", type="primary", use_container_width=True):
                 with st.spinner("🤖 AI is analyzing your image..."):
                     preferences = {
@@ -954,7 +1040,10 @@ def main():
                         'hashtags': include_hashtags
                     }
                     
-                    success, caption = generate_caption_free(image, preferences)
+                    if gen_mode == "Cloud API (Recommended)":
+                        success, caption = generate_caption_api(image, preferences, api_token)
+                    else:
+                        success, caption = generate_caption_free(image, preferences)
                     
                     if success:
                         st.markdown("### 📝 Generated Caption")
