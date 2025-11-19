@@ -856,7 +856,7 @@ def main():
             
             if uploaded_file is not None:
                 image = Image.open(uploaded_file)
-                st.image(image, width=None, caption="Your uploaded image")
+                st.image(image, use_container_width=True, caption="Your uploaded image")
         
         else:  # Use Sample Image
             sample_images = get_sample_images()
@@ -891,7 +891,7 @@ def main():
                         image = Image.open(selected_path)
                         st.markdown("---")
                         st.markdown(f"**Selected:** {st.session_state['selected_sample']}")
-                        st.image(image, width=None, caption=f"Sample: {st.session_state['selected_sample']}")
+                        st.image(image, use_container_width=True, caption=f"Sample: {st.session_state['selected_sample']}")
             else:
                 st.warning("📂 No sample images found!")
                 st.info("""
