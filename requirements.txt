@@ -1,3 +1,4 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
 streamlit
 Pillow
 torch
@@ -8,3 +9,5 @@ gtts
 easyocr
 numpy
 opencv-python-headless
+deep-translator
+watchdog

@@ -2,6 +2,15 @@ import streamlit as st
 from PIL import Image, ImageEnhance, ImageFilter
 from transformers import BlipProcessor, BlipForConditionalGeneration
 import torch
+
+# Fix for Streamlit watcher error with PyTorch
+try:
+    # Monkeypatch torch.classes.__path__ to prevent Streamlit watcher error
+    if not hasattr(torch.classes, '__path__'):
+        torch.classes.__path__ = []
+except Exception:
+    pass
+
 import random
 from gtts import gTTS
 import tempfile
@@ -14,6 +23,7 @@ import cv2
 from datetime import datetime
 import re
 from auth_system import AuthSystem
+from deep_translator import GoogleTranslator
 
 # Configure the page
 st.set_page_config(
@@ -41,13 +51,20 @@ if 'model' not in st.session_state:
     st.session_state.model = None
 if 'processor' not in st.session_state:
     st.session_state.processor = None
+if 'selected_language_index' not in st.session_state:
+    st.session_state.selected_language_index = 0
+if 'selected_speed' not in st.session_state:
+    st.session_state.selected_speed = False
 
 @st.cache_resource
 def load_model():
     """Load BLIP model - completely free and runs locally"""
     try:
-        processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-large")
-        model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-large")
+        # Use the base model which is lighter and faster for deployment
+        # The large model (1.9GB) often causes memory issues on free cloud tiers
+        model_id = "Salesforce/blip-image-captioning-base"
+        processor = BlipProcessor.from_pretrained(model_id)
+        model = BlipForConditionalGeneration.from_pretrained(model_id)
         return processor, model
     except Exception as e:
         st.error(f"Error loading model: {str(e)}")
@@ -375,6 +392,20 @@ def generate_caption_free(image, preferences=None):
         else:
             return False, f"Error generating caption: {error_msg}"
 
+def translate_text(text, target_lang):
+    """Translate text to target language using deep-translator"""
+    try:
+        # Skip translation for English variants since source is English
+        if target_lang.startswith('en'):
+            return text
+            
+        translator = GoogleTranslator(source='auto', target=target_lang)
+        translated_text = translator.translate(text)
+        return translated_text
+    except Exception as e:
+        st.warning(f"Translation failed: {str(e)}. Using original text.")
+        return text
+
 def text_to_speech(text, lang='en', slow=False):
     """Convert text to speech and return audio file path - Completely FREE using gTTS"""
     try:
@@ -392,11 +423,22 @@ def text_to_speech(text, lang='en', slow=False):
             return False, "No valid text to convert to speech"
         
         # Create temporary file with .mp3 extension
+        # Use timestamp to ensure ALWAYS fresh generation (no caching)
         temp_dir = tempfile.gettempdir()
-        temp_filename = f"tts_{hash(clean_text)}.mp3"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        temp_filename = f"tts_{lang}_{timestamp}.mp3"
         temp_path = os.path.join(temp_dir, temp_filename)
         
+        # Clean up old audio files from this session to save space
+        try:
+            for old_file in Path(temp_dir).glob("tts_*.mp3"):
+                if old_file.stat().st_mtime < (datetime.now().timestamp() - 3600):  # Older than 1 hour
+                    old_file.unlink()
+        except:
+            pass
+        
         # Generate speech using gTTS (Google Text-to-Speech - Free!)
+        # This will ALWAYS generate new audio with the selected language
         tts = gTTS(text=clean_text.strip(), lang=lang, slow=slow)
         tts.save(temp_path)
         
@@ -404,9 +446,9 @@ def text_to_speech(text, lang='en', slow=False):
         if os.path.exists(temp_path):
             return True, temp_path
         else:
-            return False, "Failed to generate audio file"
+            return False, f"Failed to generate audio file for language: {lang}"
     except Exception as e:
-        return False, f"Error generating speech: {str(e)}"
+        return False, f"Error generating speech in '{lang}': {str(e)}. Try a different language."
 
 def autoplay_audio(file_path):
     """Create HTML audio player with autoplay"""
@@ -415,9 +457,11 @@ def autoplay_audio(file_path):
             audio_bytes = f.read()
         
         audio_base64 = base64.b64encode(audio_bytes).decode()
+        # Add random ID to force browser to reload the audio element
+        rand_id = random.randint(100000, 999999)
         
         audio_html = f"""
-            <audio autoplay="true" controls style="width: 100%; margin: 10px 0;">
+            <audio id="audio_{rand_id}" autoplay="true" controls style="width: 100%; margin: 10px 0;">
                 <source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3">
                 Your browser does not support the audio element.
             </audio>
@@ -959,43 +1003,91 @@ def main():
         # Language and speed selection
         col_lang, col_speed = st.columns(2)
         
+        # Define language options
+        language_options = [
+            ("English (US)", "en"),
+            ("English (UK)", "en-gb"),
+            ("English (Australia)", "en-au"),
+            ("English (India)", "en-in"),
+            ("Hindi (हिंदी)", "hi"),
+            ("Kannada (ಕನ್ನಡ)", "kn"),
+            ("Spanish", "es"),
+            ("French", "fr"),
+            ("German", "de"),
+            ("Italian", "it"),
+        ]
+        
         with col_lang:
-            voice_lang = st.selectbox(
+            # Use on_change to capture the selection immediately
+            selected_lang_tuple = st.selectbox(
                 "🌍 Voice Language",
-                options=[
-                    ("English (US)", "en"),
-                    ("English (UK)", "en-uk"),
-                    ("English (Australia)", "en-au"),
-                    ("English (India)", "en-in"),
-                    ("Spanish", "es"),
-                    ("French", "fr"),
-                    ("German", "de"),
-                    ("Italian", "it"),
-                ],
+                options=language_options,
                 format_func=lambda x: x[0],
-                index=0,
-                key="voice_language"
+                index=st.session_state.get('selected_language_index', 0),
+                key="voice_language_selector"
             )
+            
+            # Store the selected index
+            if selected_lang_tuple:
+                st.session_state.selected_language_index = language_options.index(selected_lang_tuple)
+                st.session_state.selected_lang_name = selected_lang_tuple[0]
+                st.session_state.selected_lang_code = selected_lang_tuple[1]
         
         with col_speed:
-            voice_speed = st.checkbox("🐌 Slow Speech", value=False, help="Enable for clearer, slower pronunciation", key="voice_speed")
+            voice_speed = st.checkbox(
+                "🐌 Slow Speech", 
+                value=st.session_state.get('selected_speed', False),
+                help="Enable for clearer, slower pronunciation", 
+                key="voice_speed_checkbox"
+            )
+            st.session_state.selected_speed = voice_speed
         
         # Button row
         col_btn1, col_btn2 = st.columns(2)
         
         with col_btn1:
             if st.button("🔊 Generate & Play Voice", use_container_width=True, type="primary", key="generate_voice_btn"):
-                with st.spinner("🎵 Generating voice... Please wait"):
+                # Get language directly from selection to ensure freshness
+                if selected_lang_tuple:
+                    lang_name = selected_lang_tuple[0]
+                    lang_code = selected_lang_tuple[1]
+                else:
+                    lang_name = st.session_state.get('selected_lang_name', 'English (US)')
+                    lang_code = st.session_state.get('selected_lang_code', 'en')
+                
+                # Clear previous audio to force regeneration with new language
+                if 'current_audio_path' in st.session_state:
+                    old_path = st.session_state.get('current_audio_path', '')
+                    if old_path and os.path.exists(old_path):
+                        try:
+                            os.remove(old_path)
+                        except:
+                            pass
+                
+                # Show language code for debugging
+                st.info(f"🔧 Using language code: **{lang_code}** for {lang_name}")
+                
+                with st.spinner(f"🎵 Generating voice in {lang_name}... Please wait"):
+                    # Translate text if needed
+                    text_to_speak = st.session_state['current_caption']
+                    if not lang_code.startswith('en'):
+                        with st.spinner(f"Translating to {lang_name}..."):
+                            text_to_speak = translate_text(text_to_speak, lang_code)
+                            st.info(f"📝 Translated text: {text_to_speak}")
+
                     success_audio, audio_result = text_to_speech(
-                        st.session_state['current_caption'], 
-                        lang=voice_lang[1], 
+                        text_to_speak, 
+                        lang=lang_code, 
                         slow=voice_speed
                     )
                     
                     if success_audio:
                         st.session_state['current_audio_path'] = audio_result
+                        st.session_state['current_audio_lang'] = lang_name
+                        st.session_state['current_audio_code'] = lang_code
                         st.session_state['show_audio'] = True
-                        st.success("✅ Voice generated successfully!")
+                        st.success(f"✅ Voice generated successfully in {lang_name}!")
+                        st.rerun()
                     else:
                         st.error(f"❌ {audio_result}")
                         st.info("💡 Try simplifying the caption or changing the language settings.")
@@ -1017,7 +1109,11 @@ def main():
         # Display audio player if available
         if st.session_state.get('show_audio', False) and 'current_audio_path' in st.session_state:
             if os.path.exists(st.session_state['current_audio_path']):
-                st.markdown("#### 🎧 Audio Player")
+                # Show current audio language with code
+                current_lang = st.session_state.get('current_audio_lang', 'Unknown')
+                current_code = st.session_state.get('current_audio_code', '')
+                lang_display = f"{current_lang} ({current_code})" if current_code else current_lang
+                st.markdown(f"#### 🎧 Audio Player - {lang_display}")
                 audio_html = autoplay_audio(st.session_state['current_audio_path'])
                 st.markdown(audio_html, unsafe_allow_html=True)
                 st.balloons()
