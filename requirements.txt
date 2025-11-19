@@ -1,0 +1,10 @@
+streamlit
+Pillow
+torch
+torchvision
+transformers
+accelerate
+gtts
+easyocr
+numpy
+opencv-python-headless
