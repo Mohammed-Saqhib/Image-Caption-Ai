@@ -23,7 +23,7 @@ Explore the codebase featuring:
 - **Email**: [msaqhib76@gmail.com](mailto:msaqhib76@gmail.com)
 - **LinkedIn**: [Mohammed Saqhib](http://www.linkedin.com/in/mohammed-saqhib-87b8b325a)
 - **GitHub**: [Mohammed-Saqhib](https://github.com/Mohammed-Saqhib)
-- **Live App**: [Image Caption AI](https://image-caption-ai-inls.onrender.com/)
+- **Live App**: [Image Caption AI](https://image-caption-aii.streamlit.app/)
 
 ## 🛠️ Technologies Used
 
